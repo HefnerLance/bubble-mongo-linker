@@ -1,0 +1,33 @@
+{
+  "name": "bubble-mongo-linker",
+  "version": "1.0.0",
+  "description": "A scalable data processing pipeline to link records from a Bubble.io database to a MongoDB collection.",
+  "main": "dist/workers/bubbleWorker.js",
+  "scripts": {
+    "start:worker": "npx nodemon src/workers/bubbleWorker.ts",
+    "start:producer": "npx ts-node src/producer.ts",
+    "build": "npx tsc",
+    "start": "node dist/workers/bubbleWorker.js",
+    "clear:db": "npx ts-node src/utils/clear-db.ts",
+    "start:fresh": "npm run clear:db && npm run start:worker"
+  },
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "axios": "1.10.0",
+    "bullmq": "5.56.0",
+    "csv-parser": "3.2.0",
+    "dotenv": "16.5.0",
+    "ioredis": "5.6.1",
+    "mongodb": "6.17.0",
+    "winston": "3.17.0"
+  },
+  "devDependencies": {
+    "@types/node": "^16.11.1",
+    "@types/ioredis": "^4.27.6",
+    "nodemon": "3.1.10",
+    "ts-node": "10.9.2",
+    "typescript": "5.8.3"
+  }
+}
+

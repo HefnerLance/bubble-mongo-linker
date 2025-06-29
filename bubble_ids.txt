@@ -1,0 +1,6 @@
+# This is where you will paste your list of Bubble.io _ids.
+# Each ID should be on a new line.
+# Example:
+1646078610650x153581240182894430
+1646078610650x153581240182894431
+1646078610650x153581240182894432
