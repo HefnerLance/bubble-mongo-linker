@@ -1,3 +1,5 @@
+// src/config/index.ts
+
 import dotenv from 'dotenv';
 import path from 'path';
 
@@ -13,6 +15,8 @@ const config = {
     uri: process.env.MONGO_URI || 'mongodb://localhost:27017',
     dbName: process.env.MONGO_DB_NAME || 'Archer_Group',
     collectionName: process.env.MONGO_COLLECTION_NAME || 'business',
+    // NEW: Add the authoritative collection name
+    authoritativeCollectionName: process.env.MONGO_AUTHORITATIVE_COLLECTION_NAME || 'authoritative_businesses',
   },
   redis: {
     host: process.env.REDIS_HOST || 'localhost',
@@ -21,7 +25,6 @@ const config = {
   logLevel: process.env.LOG_LEVEL || 'info',
   concurrentJobs: parseInt(process.env.CONCURRENT_JOBS || '5', 10),
   bubbleIdsFilePath: process.env.BUBBLE_IDS_FILE_PATH || './bubble_ids.csv',
-  // NEW: Add a configurable limit for the producer
   producerJobLimit: parseInt(process.env.PRODUCER_JOB_LIMIT || '0', 10) || Infinity,
 };
 

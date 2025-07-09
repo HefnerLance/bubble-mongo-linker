@@ -1,3 +1,5 @@
+// src/utils/clear-db.ts
+
 import { MongoClient } from 'mongodb';
 import Redis from 'ioredis';
 import config from '../config';
@@ -13,9 +15,8 @@ async function clearDatabases() {
     const redis = new Redis({
         host: config.redis.host,
         port: config.redis.port,
-        maxRetriesPerRequest: null // Required for some versions
+        maxRetriesPerRequest: null
     });
-    // This deletes all keys related to the queue, which is safer than FLUSHDB
     const keys = await redis.keys(`bull:${QUEUE_NAME}:*`);
     if (keys.length > 0) {
       await redis.del(keys);
@@ -29,17 +30,25 @@ async function clearDatabases() {
     throw error;
   }
 
-  // Clear MongoDB Linking Collection
+  // Clear MongoDB Collections
   let mongoClient;
   try {
     mongoClient = new MongoClient(config.mongo.uri);
     await mongoClient.connect();
     const db = mongoClient.db(config.mongo.dbName);
+
+    // Clear the old linking collection (if it exists)
     const linkingCollection = db.collection('linking_collection');
-    const deleteResult = await linkingCollection.deleteMany({});
-    logger.info(`Cleared ${deleteResult.deletedCount} documents from MongoDB linking_collection.`);
+    const deleteLinkingResult = await linkingCollection.deleteMany({});
+    logger.info(`Cleared ${deleteLinkingResult.deletedCount} documents from MongoDB linking_collection.`);
+
+    // NEW: Clear the authoritative collection
+    const authoritativeCollection = db.collection(config.mongo.authoritativeCollectionName);
+    const deleteAuthoritativeResult = await authoritativeCollection.deleteMany({});
+    logger.info(`Cleared ${deleteAuthoritativeResult.deletedCount} documents from MongoDB ${config.mongo.authoritativeCollectionName}.`);
+
   } catch (error) {
-    logger.error('Failed to clear MongoDB collection:', error);
+    logger.error('Failed to clear MongoDB collections:', error);
     throw error;
   } finally {
     if (mongoClient) {

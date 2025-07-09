@@ -1,83 +1,116 @@
+// src/producer.ts
+
 import { Queue } from 'bullmq';
-import fs from 'fs';
-import csv from 'csv-parser';
+import axios from 'axios';
 import config from './config';
 import { redisConnection } from './queues/connection';
 import logger from './utils/logger';
 
 const QUEUE_NAME = 'bubble-processing-queue';
+const BATCH_SIZE = 100; // How many records to fetch from Bubble in each API call
+const CURSOR_LIMIT = 49900; // Set a safe limit below Bubble's 50k max
 
-async function enqueueJobs() {
-  return new Promise<void>((resolve, reject) => {
-    // NEW: Get the job limit from the config
-    const jobLimit = config.producerJobLimit;
-    logger.info('--- Starting Producer ---');
-    if (jobLimit !== Infinity) {
-        logger.info(`Job limit is set to: ${jobLimit}`);
-    }
+async function enqueueJobsFromAPI() {
+  logger.info('--- Starting Producer (Advanced API Mode) ---');
 
-    const filePath = config.bubbleIdsFilePath;
-    if (!fs.existsSync(filePath)) {
-      const errorMsg = `FATAL: ID file not found at path: ${filePath}`;
-      logger.error(errorMsg);
-      return reject(new Error(errorMsg));
-    }
+  const myQueue = new Queue(QUEUE_NAME, { connection: redisConnection });
+  let totalEnqueued = 0;
+  let keepFetching = true;
 
-    const myQueue = new Queue(QUEUE_NAME, { connection: redisConnection });
-    const jobPromises: Promise<any>[] = [];
+  // We'll sort by creation date and use this to paginate beyond the cursor limit
+  let lastProcessedDate: string | null = null;
 
-    const fileStream = fs.createReadStream(filePath);
+  while (keepFetching) {
+    let cursor = 0;
+    let inPageLoop = true;
+    logger.info(`Starting a new pagination loop. Records created after: ${lastProcessedDate || 'the beginning'}`);
 
-    fileStream
-      .pipe(csv({ headers: false }))
-      .on('data', (row) => {
-        // NEW: Check if the job limit has been reached
-        if (jobPromises.length >= jobLimit) {
-            // Stop reading the file if the limit is hit
-            fileStream.destroy();
-            return;
+    while (inPageLoop) {
+      try {
+        // --- Build the API Query ---
+        const params: any = {
+          limit: BATCH_SIZE,
+          cursor: cursor,
+          sort_field: 'Created Date', // Sort by the creation date
+          sort_descending: 'false'   // In ascending order (oldest first)
+        };
+
+        // If we have a lastProcessedDate, use it to constrain the search
+        if (lastProcessedDate) {
+          params.constraints = JSON.stringify([
+            { key: 'Created Date', constraint_type: 'greater than', value: lastProcessedDate }
+          ]);
         }
 
-        const bubbleId = row[0]?.trim();
-        if (bubbleId && !bubbleId.startsWith('#')) {
-            const jobPromise = myQueue.add('process-bubble-id', { bubbleId }, {
-                attempts: 3,
-                backoff: {
-                    type: 'exponential',
-                    delay: 5000,
-                }
+        const response = await axios.get(`${config.bubble.baseUrl}`, {
+          headers: { 'Authorization': `Bearer ${config.bubble.apiToken}` },
+          params: params
+        });
+
+        const results = response.data?.response?.results;
+
+        if (!results || results.length === 0) {
+          // If we get no results, we're done with this loop (and likely all data)
+          inPageLoop = false;
+          keepFetching = false;
+          continue;
+        }
+
+        const jobPromises = results.map((record: any) => {
+          const bubbleId = record._id;
+          if (bubbleId) {
+            return myQueue.add('process-bubble-id', { bubbleId }, {
+              attempts: 3,
+              backoff: { type: 'exponential', delay: 5000 },
             });
-            jobPromises.push(jobPromise);
-        }
-      })
-      .on('end', async () => {
-        try {
-            await Promise.all(jobPromises);
-            const enqueuedCount = jobPromises.length;
+          }
+          return Promise.resolve();
+        });
 
-            logger.info(`--- Producer Finished ---`);
-            logger.info(`Total jobs enqueued: ${enqueuedCount}`);
-            await myQueue.close();
-            resolve();
-        } catch (err) {
-            logger.error('An error occurred during job enqueuing:', err);
-            reject(err);
+        await Promise.all(jobPromises);
+        totalEnqueued += results.length;
+
+        // --- Update Cursor and Last Processed Date ---
+        cursor += results.length;
+        // The last record in this batch has the latest date so far
+        const lastRecord = results[results.length - 1];
+        lastProcessedDate = lastRecord['Created Date'];
+
+        logger.info(`Enqueued ${results.length} jobs. Cursor at: ${cursor}. Last date: ${lastProcessedDate}`);
+
+        // If we are approaching the cursor limit, break out of this inner loop
+        // The outer loop will then restart the process with an updated date filter
+        if (cursor >= CURSOR_LIMIT) {
+          logger.warn(`Cursor limit of ${CURSOR_LIMIT} reached. Resetting cursor with a new date filter.`);
+          inPageLoop = false;
         }
-      })
-      .on('error', (err) => {
-        // Ignore the error that occurs when we manually destroy the stream
-        if (err.message.includes('Stream was destroyed')) return;
-        logger.error('Error processing CSV file:', err);
-        reject(err);
-      });
-  });
+
+        // If the API returns fewer records than our batch size, it means we've reached the end of the current query
+        if (results.length < BATCH_SIZE) {
+            inPageLoop = false;
+            keepFetching = false;
+        }
+
+      } catch (error: any) {
+        logger.error('Error fetching data from Bubble API:', error.message);
+        // Stop all fetching on a critical error
+        inPageLoop = false;
+        keepFetching = false;
+      }
+    }
+  }
+
+  logger.info(`--- Producer Finished ---`);
+  logger.info(`Total jobs enqueued: ${totalEnqueued}`);
+  await myQueue.close();
 }
 
-enqueueJobs()
+enqueueJobsFromAPI()
   .catch(err => {
     logger.error('Producer failed:', err);
     process.exit(1);
   })
   .finally(() => {
-    setTimeout(() => process.exit(0), 500);
+    // Add a short delay to allow logs to flush before exiting
+    setTimeout(() => process.exit(0), 1000);
   });
